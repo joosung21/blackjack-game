@@ -1,0 +1,505 @@
+import { useState, useCallback } from 'react';
+import type { Card, GameState, ChipValue } from '../types/card';
+import { 
+  createDeck, 
+  shuffleDeck, 
+  calculateHandValue, 
+  isBlackjack, 
+  isBust,
+  canSplit
+} from '../utils/cardUtils';
+
+export const useBlackjackGame = () => {
+  const [gameState, setGameState] = useState<GameState>({
+    playerHand: [],
+    dealerHand: [],
+    deck: [],
+    playerScore: 0,
+    dealerScore: 0,
+    gameStatus: 'waiting',
+    bet: 0,
+    chips: 1000, // 시작 칩
+    // 스플릿 초기값
+    isSplit: false,
+    currentHand: 'main',
+    mainHandComplete: false,
+    splitHandComplete: false,
+    // 개발자 모드 초기값
+    devMode: false,
+    testCards: undefined,
+    gameStarted: false
+  });
+
+  // 새 게임 시작
+  const startNewGame = useCallback(() => {
+    const newDeck = shuffleDeck(createDeck());
+    
+    // 개발자 모드에서 테스트 카드가 설정되어 있으면 사용
+    const playerHand: Card[] = [];
+    
+    setGameState(prev => {
+      const useTestCards = prev.devMode && prev.testCards;
+      
+      const finalPlayerHand: Card[] = useTestCards ? [
+        { ...prev.testCards![0], isVisible: true },
+        { ...prev.testCards![1], isVisible: true }
+      ] : [
+        { ...newDeck[0], isVisible: true },
+        { ...newDeck[1], isVisible: true }
+      ];
+    
+      const dealerHand: Card[] = [
+        { ...newDeck[2], isVisible: true },
+        { ...newDeck[3], isVisible: false } // 딜러 두 번째 카드는 뒷면
+      ];
+
+      const playerScore = calculateHandValue(finalPlayerHand);
+      const dealerScore = calculateHandValue([dealerHand[0]]); // 첫 번째 카드만 계산
+      const fullDealerScore = calculateHandValue(dealerHand); // 딜러의 전체 점수
+      
+      // 블랙잭 체크
+      const playerHasBlackjack = isBlackjack(finalPlayerHand);
+      const dealerHasBlackjack = isBlackjack(dealerHand);
+      
+      let gameStatus: GameState['gameStatus'] = 'playing';
+      
+      if (playerHasBlackjack && dealerHasBlackjack) {
+        // 둘 다 블랙잭: 무승부
+        gameStatus = 'push';
+      } else if (playerHasBlackjack) {
+        // 플레이어만 블랙잭: 플레이어 승 (1.5배 배당)
+        gameStatus = 'playerWin';
+      } else if (dealerHasBlackjack) {
+        // 딜러만 블랙잭: 딜러 승
+        gameStatus = 'dealerWin';
+      }
+      
+      // 블랙잭이 있는 경우 딜러 카드를 모두 공개
+      const finalDealerHand = (playerHasBlackjack || dealerHasBlackjack) 
+        ? dealerHand.map(card => ({ ...card, isVisible: true }))
+        : dealerHand;
+      const finalDealerScore = (playerHasBlackjack || dealerHasBlackjack) 
+        ? fullDealerScore 
+        : dealerScore;
+
+      return {
+        ...prev,
+        playerHand: finalPlayerHand,
+      dealerHand: finalDealerHand,
+      deck: newDeck.slice(4),
+      playerScore,
+      dealerScore: finalDealerScore,
+      gameStatus
+    }));
+  }, []);
+
+  // 베팅하기
+  const placeBet = useCallback((amount: ChipValue) => {
+    setGameState(prev => {
+      if (prev.chips >= amount && prev.gameStatus === 'waiting') {
+        return {
+          ...prev,
+          bet: prev.bet + amount,
+          chips: prev.chips - amount
+        };
+      }
+      return prev;
+    });
+  }, []);
+
+  // 베팅 초기화
+  const clearBet = useCallback(() => {
+    setGameState(prev => ({
+      ...prev,
+      chips: prev.chips + prev.bet,
+      bet: 0
+    }));
+  }, []);
+
+  // 히트 (카드 받기)
+  const hit = useCallback(() => {
+    setGameState(prev => {
+      if (prev.gameStatus !== 'playing' || prev.deck.length === 0) {
+        return prev;
+      }
+
+      const newCard = { ...prev.deck[0], isVisible: true };
+      const newDeck = prev.deck.slice(1);
+      
+      if (prev.isSplit) {
+        // 스플릿 상태에서의 히트
+        if (prev.currentHand === 'main') {
+          const newPlayerHand = [...prev.playerHand, newCard];
+          const newPlayerScore = calculateHandValue(newPlayerHand);
+          const isBustMain = isBust(newPlayerHand);
+          
+          return {
+            ...prev,
+            playerHand: newPlayerHand,
+            deck: newDeck,
+            playerScore: newPlayerScore,
+            mainHandComplete: isBustMain, // 버스트시 메인 핸드 완료
+            currentHand: isBustMain ? 'split' : 'main'
+          };
+        } else {
+          const newSplitHand = [...(prev.splitHand || []), newCard];
+          const newSplitScore = calculateHandValue(newSplitHand);
+          const isBustSplit = isBust(newSplitHand);
+          
+          // 스플릿 핸드가 버스트되거나 두 핸드가 모두 완료되면 딘러 턴으로
+          if (isBustSplit && prev.mainHandComplete) {
+            // 두 핸드 모두 완료, 딘러 턴 시작
+            const revealedDealerHand = prev.dealerHand.map(card => ({ ...card, isVisible: true }));
+            let currentDealerHand = [...revealedDealerHand];
+            let currentDeck = [...newDeck];
+            let dealerScore = calculateHandValue(currentDealerHand);
+
+            // 딘러는 17 이상이 될 때까지 카드를 받아야 함
+            while (dealerScore < 17 && currentDeck.length > 0) {
+              const dealerNewCard = { ...currentDeck[0], isVisible: true };
+              currentDealerHand.push(dealerNewCard);
+              currentDeck = currentDeck.slice(1);
+              dealerScore = calculateHandValue(currentDealerHand);
+            }
+
+            // 게임 결과 결정
+            let gameStatus: GameState['gameStatus'];
+            const mainBust = isBust(prev.playerHand);
+            const splitBust = isBustSplit;
+            const dealerBust = isBust(currentDealerHand);
+            
+            if (mainBust && splitBust) {
+              gameStatus = 'dealerWin';
+            } else if (dealerBust) {
+              gameStatus = 'playerWin';
+            } else {
+              gameStatus = 'playerWin'; // 임시
+            }
+            
+            return {
+              ...prev,
+              splitHand: newSplitHand,
+              deck: currentDeck,
+              splitScore: newSplitScore,
+              splitHandComplete: true,
+              dealerHand: currentDealerHand,
+              dealerScore,
+              gameStatus
+            };
+          }
+          
+          // 스플릿 핸드가 버스트되지 않았지만 두 핸드가 모두 완료되었는지 확인
+          if (!isBustSplit && prev.mainHandComplete) {
+            // 두 핸드 모두 완료되었지만 버스트는 아님 - 계속 플레이 가능
+            return {
+              ...prev,
+              splitHand: newSplitHand,
+              deck: newDeck,
+              splitScore: newSplitScore,
+              splitHandComplete: isBustSplit
+            };
+          }
+          
+          return {
+            ...prev,
+            splitHand: newSplitHand,
+            deck: newDeck,
+            splitScore: newSplitScore,
+            splitHandComplete: isBustSplit
+          };
+        }
+      } else {
+        // 일반 상태에서의 히트
+        const newPlayerHand = [...prev.playerHand, newCard];
+        const newPlayerScore = calculateHandValue(newPlayerHand);
+
+        return {
+          ...prev,
+          playerHand: newPlayerHand,
+          deck: newDeck,
+          playerScore: newPlayerScore,
+          gameStatus: isBust(newPlayerHand) ? 'playerBust' : 'playing'
+        };
+      }
+    });
+  }, []);
+
+  // 스탠드 (카드 그만 받기)
+  const stand = useCallback(() => {
+    setGameState(prev => {
+      if (prev.gameStatus !== 'playing') {
+        return prev;
+      }
+
+      if (prev.isSplit) {
+        // 스플릿 상태에서의 스탠드
+        if (prev.currentHand === 'main') {
+          // 메인 핸드 완료, 스플릿 핸드로 전환
+          return {
+            ...prev,
+            mainHandComplete: true,
+            currentHand: 'split'
+          };
+        } else {
+          // 스플릿 핸드도 완료, 딜러 턴 시작
+          const revealedDealerHand = prev.dealerHand.map(card => ({ ...card, isVisible: true }));
+          let currentDealerHand = [...revealedDealerHand];
+          let currentDeck = [...prev.deck];
+          let dealerScore = calculateHandValue(currentDealerHand);
+
+          // 딜러는 17 이상이 될 때까지 카드를 받아야 함
+          while (dealerScore < 17 && currentDeck.length > 0) {
+            const newCard = { ...currentDeck[0], isVisible: true };
+            currentDealerHand.push(newCard);
+            currentDeck = currentDeck.slice(1);
+            dealerScore = calculateHandValue(currentDealerHand);
+          }
+
+          // 스플릿 게임 결과 결정
+          let gameStatus: GameState['gameStatus'];
+          
+          // 두 핸드 모두 버스트인지 확인
+          const mainBust = isBust(prev.playerHand);
+          const splitBust = isBust(prev.splitHand || []);
+          const dealerBust = isBust(currentDealerHand);
+          
+          if (mainBust && splitBust) {
+            gameStatus = 'dealerWin'; // 두 핸드 모두 버스트
+          } else if (dealerBust) {
+            gameStatus = 'playerWin'; // 딘러 버스트
+          } else {
+            // 점수 비교는 settleGame에서 처리
+            gameStatus = 'playerWin'; // 임시
+          }
+          
+          return {
+            ...prev,
+            dealerHand: currentDealerHand,
+            deck: currentDeck,
+            dealerScore,
+            splitHandComplete: true,
+            gameStatus
+          };
+        }
+      } else {
+        // 일반 상태에서의 스탠드
+        const revealedDealerHand = prev.dealerHand.map(card => ({ ...card, isVisible: true }));
+        let currentDealerHand = [...revealedDealerHand];
+        let currentDeck = [...prev.deck];
+        let dealerScore = calculateHandValue(currentDealerHand);
+
+        // 딜러는 17 이상이 될 때까지 카드를 받아야 함
+        while (dealerScore < 17 && currentDeck.length > 0) {
+          const newCard = { ...currentDeck[0], isVisible: true };
+          currentDealerHand.push(newCard);
+          currentDeck = currentDeck.slice(1);
+          dealerScore = calculateHandValue(currentDealerHand);
+        }
+
+        // 게임 결과 결정
+        let gameStatus: GameState['gameStatus'];
+        if (isBust(currentDealerHand)) {
+          gameStatus = 'playerWin';
+        } else if (dealerScore > prev.playerScore) {
+          gameStatus = 'dealerWin';
+        } else if (dealerScore < prev.playerScore) {
+          gameStatus = 'playerWin';
+        } else {
+          gameStatus = 'push';
+        }
+
+        return {
+          ...prev,
+          dealerHand: currentDealerHand,
+          deck: currentDeck,
+          dealerScore,
+          gameStatus
+        };
+      }
+    });
+  }, []);
+
+  // 더블 다운
+  const doubleDown = useCallback(() => {
+    setGameState(prev => {
+      if (prev.gameStatus !== 'playing' || prev.chips < prev.bet || prev.playerHand.length !== 2) {
+        return prev;
+      }
+
+      const newCard = { ...prev.deck[0], isVisible: true };
+      const newPlayerHand = [...prev.playerHand, newCard];
+      const newPlayerScore = calculateHandValue(newPlayerHand);
+      const newDeck = prev.deck.slice(1);
+
+      // 더블 다운 후 자동으로 스탠드
+      const revealedDealerHand = prev.dealerHand.map(card => ({ ...card, isVisible: true }));
+      let currentDealerHand = [...revealedDealerHand];
+      let currentDeck = [...newDeck];
+      let dealerScore = calculateHandValue(currentDealerHand);
+
+      // 플레이어가 버스트가 아닌 경우에만 딜러 턴 진행
+      if (!isBust(newPlayerHand)) {
+        while (dealerScore < 17 && currentDeck.length > 0) {
+          const dealerCard = { ...currentDeck[0], isVisible: true };
+          currentDealerHand.push(dealerCard);
+          currentDeck = currentDeck.slice(1);
+          dealerScore = calculateHandValue(currentDealerHand);
+        }
+      }
+
+      // 게임 결과 결정
+      let gameStatus: GameState['gameStatus'];
+      if (isBust(newPlayerHand)) {
+        gameStatus = 'playerBust';
+      } else if (isBust(currentDealerHand)) {
+        gameStatus = 'playerWin';
+      } else if (dealerScore > newPlayerScore) {
+        gameStatus = 'dealerWin';
+      } else if (dealerScore < newPlayerScore) {
+        gameStatus = 'playerWin';
+      } else {
+        gameStatus = 'push';
+      }
+
+      return {
+        ...prev,
+        playerHand: newPlayerHand,
+        dealerHand: currentDealerHand,
+        deck: currentDeck,
+        playerScore: newPlayerScore,
+        dealerScore,
+        gameStatus,
+        bet: prev.bet * 2, // 베팅 금액 두 배
+        chips: prev.chips - prev.bet // 추가 베팅 금액 차감
+      };
+    });
+  }, []);
+
+  // 게임 종료 후 정산
+  const settleGame = useCallback(() => {
+    setGameState(prev => {
+      let winnings = 0;
+      
+      switch (prev.gameStatus) {
+        case 'playerWin':
+          if (isBlackjack(prev.playerHand) && prev.playerHand.length === 2) {
+            // 블랙잭은 1.5배 지불
+            winnings = prev.bet + Math.floor(prev.bet * 1.5);
+          } else {
+            // 일반 승리는 1:1 지불
+            winnings = prev.bet * 2;
+          }
+          break;
+        case 'push':
+          // 무승부는 베팅 금액 반환
+          winnings = prev.bet;
+          break;
+        case 'dealerWin':
+        case 'playerBust':
+          // 패배는 베팅 금액 잃음
+          winnings = 0;
+          break;
+      }
+
+      return {
+        ...prev,
+        chips: prev.chips + winnings,
+        bet: 0,
+        gameStatus: 'waiting',
+        playerHand: [],
+        dealerHand: [],
+        deck: [],
+        playerScore: 0,
+        dealerScore: 0
+      };
+    });
+  }, []);
+
+  // 스플릿 기능
+  const split = useCallback(() => {
+    if (!canSplit(gameState.playerHand) || gameState.chips < gameState.bet || gameState.isSplit) {
+      return; // 스플릿 불가능
+    }
+
+    setGameState(prev => {
+      const [card1, card2] = prev.playerHand;
+      const newCard1 = prev.deck[0]; // 메인 핸드에 추가할 카드
+      const newCard2 = prev.deck[1]; // 스플릿 핸드에 추가할 카드
+      
+      const mainHand = [card1, { ...newCard1, isVisible: true }];
+      const splitHand = [card2, { ...newCard2, isVisible: true }];
+      
+      return {
+        ...prev,
+        playerHand: mainHand,
+        splitHand,
+        playerScore: calculateHandValue(mainHand),
+        splitScore: calculateHandValue(splitHand),
+        deck: prev.deck.slice(2),
+        isSplit: true,
+        currentHand: 'main',
+        splitBet: prev.bet,
+        chips: prev.chips - prev.bet, // 스플릿 베팅 금액 차감
+        mainHandComplete: false,
+        splitHandComplete: false
+      };
+    });
+  }, [gameState.playerHand, gameState.chips, gameState.bet, gameState.isSplit]);
+
+  // 스플릿 상태에서 다음 핸드로 전환
+  const switchToNextHand = useCallback(() => {
+    setGameState(prev => {
+      if (prev.currentHand === 'main' && !prev.splitHandComplete) {
+        return {
+          ...prev,
+          currentHand: 'split',
+          mainHandComplete: true
+        };
+      }
+      return prev;
+    });
+  }, []);
+
+  // 개발자 모드 토글
+  const toggleDevMode = useCallback(() => {
+    setGameState(prev => ({
+      ...prev,
+      devMode: !prev.devMode,
+      testCards: undefined // 개발자 모드 끄면 테스트 카드 초기화
+    }));
+  }, []);
+
+  // 테스트 카드 설정 (스플릿 테스트용)
+  const setTestCards = useCallback((card1: Card, card2: Card) => {
+    setGameState(prev => ({
+      ...prev,
+      testCards: [card1, card2]
+    }));
+  }, []);
+
+  // 테스트 카드 초기화
+  const clearTestCards = useCallback(() => {
+    setGameState(prev => ({
+      ...prev,
+      testCards: undefined
+    }));
+  }, []);
+
+  return {
+    gameState,
+    startNewGame,
+    placeBet,
+    clearBet,
+    hit,
+    stand,
+    doubleDown,
+    settleGame,
+    split,
+    switchToNextHand,
+    canSplit: () => canSplit(gameState.playerHand) && !gameState.isSplit && gameState.chips >= gameState.bet,
+    // 개발자 모드 함수들
+    toggleDevMode,
+    setTestCards,
+    clearTestCards
+  };
+};
