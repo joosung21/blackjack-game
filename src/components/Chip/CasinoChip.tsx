@@ -1,6 +1,26 @@
 import React from "react";
 import type { ChipValue } from '../../types/card';
 
+// 칩 이미지 import
+import chip5 from '../../assets/images/chips/chip-5.svg';
+import chip10 from '../../assets/images/chips/chip-10.svg';
+import chip20 from '../../assets/images/chips/chip-20.svg';
+import chip50 from '../../assets/images/chips/chip-50.svg';
+import chip100 from '../../assets/images/chips/chip-100.svg';
+import chip500 from '../../assets/images/chips/chip-500.svg';
+import chip1000 from '../../assets/images/chips/chip-1000.svg';
+
+// 칩 이미지 매핑
+const chipImages: Record<ChipValue, string> = {
+  5: chip5,
+  10: chip10,
+  20: chip20,
+  50: chip50,
+  100: chip100,
+  500: chip500,
+  1000: chip1000,
+};
+
 interface CasinoChipProps {
   value: ChipValue;
   onClick?: () => void;
@@ -34,7 +54,7 @@ const CasinoChip: React.FC<CasinoChipProps> = ({
       onClick={onClick}
     >
       <img
-        src={`/src/assets/images/chips/chip-${value}.svg`}
+        src={chipImages[value]}
         alt={`$${value} chip`}
         style={{
           width: "100%",
