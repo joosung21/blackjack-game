@@ -1,7 +1,8 @@
 import React from "react";
+import type { ChipValue } from '../../types/card';
 
 interface CasinoChipProps {
-  value: 10 | 20 | 50 | 100 | 500 | 1000;
+  value: ChipValue;
   onClick?: () => void;
   className?: string;
   style?: React.CSSProperties;

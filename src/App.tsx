@@ -947,7 +947,7 @@ function App() {
               marginBottom: "20px",
             }}
           >
-            {([10, 20, 50, 100, 500, 1000] as ChipValue[]).map((value) => (
+            {([5, 10, 20, 50, 100, 500, 1000] as ChipValue[]).map((value) => (
               <CasinoChip
                 key={value}
                 value={value}

@@ -20,7 +20,7 @@ export interface Card {
 export type Deck = Card[];
 
 // 칩 관련 타입
-export type ChipValue = 10 | 20 | 50 | 100 | 500 | 1000;
+export type ChipValue = 5 | 10 | 20 | 50 | 100 | 500 | 1000;
 
 export interface Chip {
   value: ChipValue;
